@@ -24,6 +24,7 @@ class Settings extends Model
         $this->require_activation = true;
         $this->activate_mode = self::ACTIVATE_AUTO;
         $this->use_throttle = true;
+        $this->block_persistence = false;
         $this->allow_registration = true;
         $this->welcome_template = 'rainlab.user::mail.welcome';
         $this->login_attribute = self::LOGIN_EMAIL;
@@ -32,9 +33,18 @@ class Settings extends Model
     public function getActivateModeOptions()
     {
         return [
-            self::ACTIVATE_AUTO => ['rainlab.user::lang.settings.activate_mode_auto', 'rainlab.user::lang.settings.activate_mode_auto_comment'],
-            self::ACTIVATE_USER => ['rainlab.user::lang.settings.activate_mode_user', 'rainlab.user::lang.settings.activate_mode_user_comment'],
-            self::ACTIVATE_ADMIN => ['rainlab.user::lang.settings.activate_mode_admin', 'rainlab.user::lang.settings.activate_mode_admin_comment'],
+            self::ACTIVATE_AUTO => [
+                'rainlab.user::lang.settings.activate_mode_auto',
+                'rainlab.user::lang.settings.activate_mode_auto_comment'
+            ],
+            self::ACTIVATE_USER => [
+                'rainlab.user::lang.settings.activate_mode_user',
+                'rainlab.user::lang.settings.activate_mode_user_comment'
+            ],
+            self::ACTIVATE_ADMIN => [
+                'rainlab.user::lang.settings.activate_mode_admin',
+                'rainlab.user::lang.settings.activate_mode_admin_comment'
+            ]
         ];
     }
 
@@ -42,7 +52,7 @@ class Settings extends Model
     {
         return [
             self::LOGIN_EMAIL => ['rainlab.user::lang.login.attribute_email'],
-            self::LOGIN_USERNAME => ['rainlab.user::lang.login.attribute_username'],
+            self::LOGIN_USERNAME => ['rainlab.user::lang.login.attribute_username']
         ];
     }
 
@@ -58,8 +68,9 @@ class Settings extends Model
     public function getWelcomeTemplateOptions()
     {
         $codes = array_keys(MailTemplate::listAllTemplates());
-        $result = [''=>'- '.Lang::get('rainlab.user::lang.settings.no_mail_template').' -'];
+        $result = ['' => '- '.Lang::get('rainlab.user::lang.settings.no_mail_template').' -'];
         $result += array_combine($codes, $codes);
+
         return $result;
     }
 }

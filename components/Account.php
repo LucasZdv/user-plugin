@@ -18,6 +18,12 @@ use Exception;
 
 class Account extends ComponentBase
 {
+    /**
+     * Flag for allowing registration, pulled from UserSettings
+     * @var bool
+     */
+    public $canRegister;
+    
     public function componentDetails()
     {
         return [
@@ -40,7 +46,13 @@ class Account extends ComponentBase
                 'description' => 'rainlab.user::lang.account.code_param_desc',
                 'type'        => 'string',
                 'default'     => 'code'
-            ]
+            ],
+            'forceSecure' => [
+                'title'       => 'Force secure protocol',
+                'description' => 'Always redirect the URL with the HTTPS schema.',
+                'type'        => 'checkbox',
+                'default'     => 0
+            ],
         ];
     }
 
@@ -48,17 +60,32 @@ class Account extends ComponentBase
     {
         return [''=>'- none -'] + Page::sortBy('baseFileName')->lists('baseFileName', 'baseFileName');
     }
+    
+    /**
+     * Executed when this component is initialized
+     */
+    public function init()
+    {
+        $this->canRegister = $this->page['canRegister'] = UserSettings::get('allow_registration', true);
+    }
 
     /**
      * Executed when this component is bound to a page or layout.
      */
     public function onRun()
     {
-        $routeParameter = $this->property('paramCode');
+        /*
+         * Redirect to HTTPS checker
+         */
+        if ($redirect = $this->redirectForceSecure()) {
+            return $redirect;
+        }
 
         /*
          * Activation code supplied
          */
+        $routeParameter = $this->property('paramCode');
+
         if ($activationCode = $this->param($routeParameter)) {
             $this->onActivate($activationCode);
         }
@@ -103,47 +130,53 @@ class Account extends ComponentBase
      */
     public function onSignin()
     {
-        /*
-         * Validate input
-         */
-        $data = post();
-        $rules = [];
+        try {
+            /*
+             * Validate input
+             */
+            $data = post();
+            $rules = [];
 
-        $rules['login'] = $this->loginAttribute() == UserSettings::LOGIN_USERNAME
-            ? 'required|between:2,255'
-            : 'required|email|between:6,255';
+            $rules['login'] = $this->loginAttribute() == UserSettings::LOGIN_USERNAME
+                ? 'required|between:2,255'
+                : 'required|email|between:6,255';
 
-        $rules['password'] = 'required|between:4,255';
+            $rules['password'] = 'required|between:4,255';
 
-        if (!array_key_exists('login', $data)) {
-            $data['login'] = post('username', post('email'));
+            if (!array_key_exists('login', $data)) {
+                $data['login'] = post('username', post('email'));
+            }
+
+            $validation = Validator::make($data, $rules);
+            if ($validation->fails()) {
+                throw new ValidationException($validation);
+            }
+
+            /*
+             * Authenticate user
+             */
+            $credentials = [
+                'login'    => array_get($data, 'login'),
+                'password' => array_get($data, 'password')
+            ];
+
+            Event::fire('rainlab.user.beforeAuthenticate', [$this, $credentials]);
+
+            $user = Auth::authenticate($credentials, true);
+
+            /*
+             * Redirect to the intended page after successful sign in
+             */
+            $redirectUrl = $this->pageUrl($this->property('redirect'))
+                ?: $this->property('redirect');
+
+            if ($redirectUrl = input('redirect', $redirectUrl)) {
+                return Redirect::intended($redirectUrl);
+            }
         }
-
-        $validation = Validator::make($data, $rules);
-        if ($validation->fails()) {
-            throw new ValidationException($validation);
-        }
-
-        /*
-         * Authenticate user
-         */
-        $credentials = [
-            'login'    => array_get($data, 'login'),
-            'password' => array_get($data, 'password')
-        ];
-
-        Event::fire('rainlab.user.beforeAuthenticate', [$this, $credentials]);
-
-        $user = Auth::authenticate($credentials, true);
-
-        /*
-         * Redirect to the intended page after successful sign in
-         */
-        $redirectUrl = $this->pageUrl($this->property('redirect'))
-            ?: $this->property('redirect');
-
-        if ($redirectUrl = input('redirect', $redirectUrl)) {
-            return Redirect::intended($redirectUrl);
+        catch (Exception $ex) {
+            if (Request::ajax()) throw $ex;
+            else Flash::error($ex->getMessage());
         }
     }
 
@@ -153,7 +186,7 @@ class Account extends ComponentBase
     public function onRegister()
     {
         try {
-            if (!UserSettings::get('allow_registration', true)) {
+            if (!$this->canRegister) {
                 throw new ApplicationException(Lang::get('rainlab.user::lang.account.registration_disabled'));
             }
 
@@ -168,7 +201,7 @@ class Account extends ComponentBase
 
             $rules = [
                 'email'    => 'required|email|between:6,255',
-                'password' => 'required|between:4,255'
+                'password' => 'required|between:4,255|confirmed'
             ];
 
             if ($this->loginAttribute() == UserSettings::LOGIN_USERNAME) {
@@ -183,10 +216,14 @@ class Account extends ComponentBase
             /*
              * Register user
              */
+            Event::fire('rainlab.user.beforeRegister', [&$data]);
+            
             $requireActivation = UserSettings::get('require_activation', true);
             $automaticActivation = UserSettings::get('activate_mode') == UserSettings::ACTIVATE_AUTO;
             $userActivation = UserSettings::get('activate_mode') == UserSettings::ACTIVATE_USER;
             $user = Auth::register($data, $automaticActivation);
+            
+            Event::fire('rainlab.user.register', [$user, $data]);
 
             /*
              * Activation is by the user, send the email
@@ -303,9 +340,9 @@ class Account extends ComponentBase
         if (!$user->checkHashValue('password', post('password'))) {
             throw new ValidationException(['password' => Lang::get('rainlab.user::lang.account.invalid_deactivation_pass')]);
         }
-
-        $user->delete();
+        
         Auth::logout();
+        $user->delete();
 
         Flash::success(post('flash', Lang::get('rainlab.user::lang.account.success_deactivation')));
 
@@ -385,5 +422,23 @@ class Account extends ComponentBase
         if ($redirectUrl = post('redirect', $redirectUrl)) {
             return Redirect::to($redirectUrl);
         }
+    }
+
+    /**
+     * Checks if the force secure property is enabled and if so
+     * returns a redirect object.
+     * @return mixed
+     */
+    protected function redirectForceSecure()
+    {
+        if (
+            Request::secure() ||
+            Request::ajax() ||
+            !$this->property('forceSecure')
+        ) {
+            return;
+        }
+
+        return Redirect::secure(Request::path());
     }
 }
